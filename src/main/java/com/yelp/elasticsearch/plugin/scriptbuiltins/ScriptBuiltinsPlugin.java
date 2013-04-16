@@ -15,14 +15,16 @@ import org.elasticsearch.script.mvel.MvelScriptEngineService;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 
 public class ScriptBuiltinsPlugin extends AbstractPlugin {
 
-    static public final String IMPORTS_CONFIG_PREFIX =
+    public static final String IMPORTS_CONFIG_PREFIX =
             "com.yelp.elasticsearch.scriptbuiltins.imports";
-    static public final String STATICS_CONFIG_PREFIX =
+    public static final String STATICS_CONFIG_PREFIX =
             "com.yelp.elasticsearch.scriptbuiltins.statics";
 
     private final Settings settings;
@@ -47,6 +49,7 @@ public class ScriptBuiltinsPlugin extends AbstractPlugin {
     }
 
     public static class ScriptBuiltinsModule extends AbstractModule {
+
         @Override
         protected void configure() {
             bind(ScriptBuiltinsService.class).asEagerSingleton();
@@ -59,13 +62,14 @@ public class ScriptBuiltinsPlugin extends AbstractPlugin {
         public ScriptBuiltinsService(Settings settings, ScriptService scriptService) {
             super(settings);
 
-            ParserConfiguration parserConfiguration = getParserConfiguration(scriptService);
+            List<ParserConfiguration> parserConfigurations =
+                    getParserConfigurations(scriptService);
 
-            if (parserConfiguration != null)
+            for (ParserConfiguration parserConfiguration : parserConfigurations)
                 registerScriptBuiltins(parserConfiguration);
         }
 
-        private ParserConfiguration getParserConfiguration(ScriptService scriptService) {
+        private List<ParserConfiguration> getParserConfigurations(ScriptService scriptService) {
             Map<String, ScriptEngineService> scriptEngines;
             try {
                 Field f = ScriptService.class.getDeclaredField("scriptEngines");
@@ -76,12 +80,19 @@ public class ScriptBuiltinsPlugin extends AbstractPlugin {
                 return null;
             }
 
+            ArrayList<ParserConfiguration> parserConfigurations =
+                    new ArrayList<ParserConfiguration>();
             for (ScriptEngineService engineService : scriptEngines.values())
-                if (engineService instanceof MvelScriptEngineService)
-                    return getParserConfiguration((MvelScriptEngineService) engineService);
+                if (engineService instanceof MvelScriptEngineService) {
+                    ParserConfiguration parserConfiguration = getParserConfiguration(
+                            (MvelScriptEngineService) engineService);
+                    if (parserConfiguration != null)
+                        parserConfigurations.add(parserConfiguration);
+                }
 
-            logger.warn("Failed to find MvelScriptEngineService from ScriptService scriptEngines");
-            return null;
+            if (parserConfigurations.size() < 1)
+                logger.warn("Failed to find MvelScriptEngineService from ScriptService scriptEngines");
+            return parserConfigurations;
         }
 
         private ParserConfiguration getParserConfiguration(
@@ -100,8 +111,6 @@ public class ScriptBuiltinsPlugin extends AbstractPlugin {
             for (String importEntry : settings.getAsArray(IMPORTS_CONFIG_PREFIX))
                 parserConfiguration.addPackageImport(importEntry);
 
-            registerClassStaticMethodsAsScriptBuiltins(ScriptBuiltins.class, parserConfiguration);
-
             for (String staticEntry : settings.getAsArray(STATICS_CONFIG_PREFIX))
                 try {
                     Class klass = settings.getClassLoader().loadClass(staticEntry);
@@ -116,13 +125,6 @@ public class ScriptBuiltinsPlugin extends AbstractPlugin {
             for (Method m : klass.getMethods())
                 if ((m.getModifiers() & Modifier.STATIC) > 0)
                     parserConfiguration.addImport(m.getName(), m);
-        }
-    }
-
-    public static class ScriptBuiltins {
-
-        static public int add2(Integer a, Integer b) {
-            return a + b;
         }
     }
 }
